@@ -35,6 +35,11 @@ function checkBothLoaded(){var el=document.getElementById('csvStatus');if(!el)re
         if(state.currentDP&&state.currentDP.id){var cphu=cascadingData.find(function(r){return r.dp_id===state.currentDP.id;});
             if(cphu&&cphu.phu_name){state.geoInfo.phuName=cphu.phu_name;state.currentDP.phuName=cphu.phu_name;saveToStorage();}
         }
+        // Re-populate dropdowns if already on a screen
+        if(state.isLoggedIn&&state.currentUser){
+            if(state.currentUser.role==='dhmt')populateDhmtPhuDropdown();
+            if(state.currentUser.role==='phu')populatePhuDpDropdown();
+        }
     }
     else if(csvLoaded||usersLoaded){el.innerHTML='<div class="csv-loading"><div class="csv-spinner"></div><span>Loading...</span></div>';}
 }
@@ -117,6 +122,36 @@ function handleLogout(){if(!confirm('Log out?'))return;state.isLoggedIn=false;st
     document.getElementById('loginError').textContent='';document.getElementById('autoAssignment').style.display='none';
 }
 
+// ITN TYPE CHECKBOX → QUANTITY TOGGLE
+function toggleTypeQty(prefix,type,checked){
+    var container=document.getElementById(prefix+'_type_qtys');if(!container)return;
+    var existingRow=document.getElementById(prefix+'_qty_'+type);
+    if(checked&&!existingRow){
+        var row=document.createElement('div');row.className='itn-qty-row';row.id=prefix+'_qty_'+type;
+        var cls=type.toLowerCase();
+        row.innerHTML='<span class="itn-qty-label '+cls+'">'+type+'</span><input type="number" class="form-input" id="'+prefix+'_qty_val_'+type+'" min="1" placeholder="Quantity for '+type+'..." required><span style="font-size:10px;color:#999;">ITNs</span>';
+        container.appendChild(row);
+        document.getElementById(prefix+'_qty_val_'+type).focus();
+    }else if(!checked&&existingRow){existingRow.remove();}
+}
+function getTypeQuantities(prefix){
+    var results=[];var container=document.getElementById(prefix+'_type_qtys');if(!container)return results;
+    var rows=container.querySelectorAll('.itn-qty-row');
+    rows.forEach(function(row){
+        var type=row.querySelector('.itn-qty-label').textContent.trim();
+        var input=row.querySelector('input[type="number"]');
+        var qty=parseInt(input?input.value:0)||0;
+        if(type&&qty>0)results.push({type:type,quantity:qty});
+    });
+    return results;
+}
+function clearTypeCheckboxes(prefix){
+    var container=document.getElementById(prefix+'_type_qtys');if(container)container.innerHTML='';
+    var form=container?container.closest('form')||container.closest('.form-content'):null;
+    if(form){var checks=form.querySelectorAll('.itn-check');checks.forEach(function(cb){cb.checked=false;});}
+}
+function formatTypeQtySummary(items){return items.map(function(i){return i.quantity+' '+i.type;}).join(' + ');}
+
 // ============ DHMT SCREEN ============
 function showDHMTScreen(){
     document.getElementById('dhmtScreen').style.display='block';
@@ -145,19 +180,22 @@ function populatePhuDpDropdown(){
 }
 function submitDHMT(){
     var date=document.getElementById('dhmt_date').value,batch=document.getElementById('dhmt_batch').value.trim();
-    var type=document.getElementById('dhmt_type').value,qty=parseInt(document.getElementById('dhmt_qty').value)||0;
-    var to=document.getElementById('dhmt_to_phu').value.trim();
+    var typeQtys=getTypeQuantities('dhmt');
+    var to=document.getElementById('dhmt_to_phu').value;
     var notes=document.getElementById('dhmt_notes').value.trim();
-    if(!date||!type||qty<1||!to){showNotification('Fill date, type, qty, PHU name','error');return;}
-    var rec={id:'DHMT-'+Date.now().toString(36).toUpperCase(),timestamp:new Date().toISOString(),date:date,batch:batch,type:type,quantity:qty,
+    if(!date||typeQtys.length===0||!to){showNotification('Fill date, select type(s) with qty, and PHU','error');return;}
+    var totalQty=0;typeQtys.forEach(function(tq){totalQty+=tq.quantity;});
+    var rec={id:'DHMT-'+Date.now().toString(36).toUpperCase(),timestamp:new Date().toISOString(),date:date,batch:batch,
+        types:typeQtys,totalQuantity:totalQty,typeSummary:formatTypeQtySummary(typeQtys),
         toPhu:to,notes:notes,district:state.geoInfo.district,recordedBy:state.currentUser.name,userId:state.currentUser.id,synced:false};
-    state.dhmtRecords.push(rec);saveToStorage();showNotification(qty+' '+type+' ITNs → '+to,'success');
+    state.dhmtRecords.push(rec);saveToStorage();showNotification(totalQty+' ITNs → '+to,'success');
     sendToSheet('dhmt_distribution',rec);renderDHMTHistory();
-    ['dhmt_batch','dhmt_qty','dhmt_to_phu','dhmt_notes'].forEach(function(id){document.getElementById(id).value='';});
+    document.getElementById('dhmt_batch').value='';document.getElementById('dhmt_notes').value='';
+    clearTypeCheckboxes('dhmt');document.getElementById('dhmt_to_phu').value='';
 }
 function renderDHMTHistory(){var c=document.getElementById('dhmtHistory');if(!c)return;
     if(!state.dhmtRecords.length){c.innerHTML='<div class="no-data">No records</div>';return;}
-    c.innerHTML=state.dhmtRecords.slice().reverse().map(function(r){return '<div class="dist-item"><div><div class="dist-hh-name">→ '+r.toPhu+'</div><div class="dist-voucher-code">'+r.quantity+' '+r.type+' | '+r.date+'</div></div><div><div class="dist-badge pass">SENT</div></div></div>';}).join('');}
+    c.innerHTML=state.dhmtRecords.slice().reverse().map(function(r){var info=r.typeSummary||(r.quantity+' '+r.type);return '<div class="dist-item"><div><div class="dist-hh-name">→ '+r.toPhu+'</div><div class="dist-voucher-code">'+info+' | '+r.date+'</div></div><div><div class="dist-badge pass">SENT</div></div></div>';}).join('');}
 
 // ============ PHU SCREEN ============
 function showPHUScreen(){
@@ -173,20 +211,23 @@ function showPHUScreen(){
 }
 function submitPHU(){
     var date=document.getElementById('phu_date').value,batch=document.getElementById('phu_batch').value.trim();
-    var type=document.getElementById('phu_type').value,qty=parseInt(document.getElementById('phu_qty').value)||0;
-    var to=document.getElementById('phu_to_dp').value.trim(),from=document.getElementById('phu_from').value;
+    var typeQtys=getTypeQuantities('phu');
+    var to=document.getElementById('phu_to_dp').value,from=document.getElementById('phu_from').value;
     var notes=document.getElementById('phu_notes').value.trim();
-    if(!date||!type||qty<1||!to){showNotification('Fill date, type, qty, DP name','error');return;}
-    var rec={id:'PHU-'+Date.now().toString(36).toUpperCase(),timestamp:new Date().toISOString(),date:date,batch:batch,type:type,quantity:qty,
+    if(!date||typeQtys.length===0||!to){showNotification('Fill date, select type(s) with qty, and DP','error');return;}
+    var totalQty=0;typeQtys.forEach(function(tq){totalQty+=tq.quantity;});
+    var rec={id:'PHU-'+Date.now().toString(36).toUpperCase(),timestamp:new Date().toISOString(),date:date,batch:batch,
+        types:typeQtys,totalQuantity:totalQty,typeSummary:formatTypeQtySummary(typeQtys),
         toDp:to,from:from,notes:notes,district:state.geoInfo.district,chiefdom:state.geoInfo.chiefdom,
         recordedBy:state.currentUser.name,userId:state.currentUser.id,synced:false};
-    state.phuRecords.push(rec);saveToStorage();showNotification(qty+' '+type+' ITNs → '+to,'success');
+    state.phuRecords.push(rec);saveToStorage();showNotification(totalQty+' ITNs → '+to,'success');
     sendToSheet('phu_distribution',rec);renderPHUHistory();
-    ['phu_batch','phu_qty','phu_to_dp','phu_notes'].forEach(function(id){document.getElementById(id).value='';});
+    document.getElementById('phu_batch').value='';document.getElementById('phu_notes').value='';
+    clearTypeCheckboxes('phu');document.getElementById('phu_to_dp').value='';
 }
 function renderPHUHistory(){var c=document.getElementById('phuHistory');if(!c)return;
     if(!state.phuRecords.length){c.innerHTML='<div class="no-data">No records</div>';return;}
-    c.innerHTML=state.phuRecords.slice().reverse().map(function(r){return '<div class="dist-item"><div><div class="dist-hh-name">→ '+r.toDp+'</div><div class="dist-voucher-code">'+r.quantity+' '+r.type+' | '+r.date+'</div></div><div><div class="dist-badge pass">SENT</div></div></div>';}).join('');}
+    c.innerHTML=state.phuRecords.slice().reverse().map(function(r){var info=r.typeSummary||(r.quantity+' '+r.type);return '<div class="dist-item"><div><div class="dist-hh-name">→ '+r.toDp+'</div><div class="dist-voucher-code">'+info+' | '+r.date+'</div></div><div><div class="dist-badge pass">SENT</div></div></div>';}).join('');}
 
 // ============ FIELD AGENT SCREEN ============
 function showAppScreen(){
@@ -354,13 +395,18 @@ function updateDistHistory(){var c=document.getElementById('distHistory');if(!c)
 
 // ITN STOCK
 function submitITNReceived(){var date=document.getElementById('itn_recv_date').value,batch=document.getElementById('itn_batch').value.trim();
-    var type=document.getElementById('itn_recv_type').value,qty=parseInt(document.getElementById('itn_recv_qty').value)||0;
+    var typeQtys=getTypeQuantities('stock');
     var from=document.getElementById('itn_recv_from').value,notes=document.getElementById('itn_recv_notes').value.trim();
-    if(!date||!type||qty<1){showNotification('Fill date, type, qty','error');return;}
-    var rec={id:'STK-'+Date.now().toString(36).toUpperCase(),timestamp:new Date().toISOString(),date:date,batch:batch,type:type,quantity:qty,from:from,notes:notes,
-        distributionPoint:state.currentDP?state.currentDP.name:'',dpId:state.currentDP?state.currentDP.id:'',recordedBy:state.currentUser?state.currentUser.name:'',synced:false};
-    state.itnStock.push(rec);saveToStorage();showNotification(qty+' '+type+' ITNs recorded!','success');sendToSheet('stock',rec);
-    ['itn_batch','itn_recv_qty','itn_recv_notes'].forEach(function(id){document.getElementById(id).value='';});
+    if(!date||typeQtys.length===0){showNotification('Fill date and select type(s) with qty','error');return;}
+    var totalQty=0;
+    typeQtys.forEach(function(tq){
+        var rec={id:'STK-'+Date.now().toString(36).toUpperCase()+'-'+tq.type,timestamp:new Date().toISOString(),date:date,batch:batch,type:tq.type,quantity:tq.quantity,from:from,notes:notes,
+            distributionPoint:state.currentDP?state.currentDP.name:'',dpId:state.currentDP?state.currentDP.id:'',recordedBy:state.currentUser?state.currentUser.name:'',synced:false};
+        state.itnStock.push(rec);sendToSheet('stock',rec);totalQty+=tq.quantity;
+    });
+    saveToStorage();showNotification(formatTypeQtySummary(typeQtys)+' recorded!','success');
+    document.getElementById('itn_batch').value='';document.getElementById('itn_recv_notes').value='';
+    clearTypeCheckboxes('stock');
     updateStockSummary();updateSyncStats();updateAllCounts();}
 function updateStockSummary(){var tR=getStockReceived(),tD=getDistributed();
     var e1=document.getElementById('stockReceived');if(e1)e1.textContent=tR;var e2=document.getElementById('stockDistributed');if(e2)e2.textContent=tD;
@@ -482,8 +528,8 @@ function exportData(){var all=[];
     state.registrations.forEach(function(r){all.push({type:'Registration',id:r.id,timestamp:r.timestamp,district:r.district,chiefdom:r.chiefdom,phuName:r.phuName,dp:r.distributionPoint,hhName:r.hhName,hhPhone:r.hhPhone,totalPeople:r.totalPeople,males:r.males,females:r.females,under5:r.under5,pregnant:r.pregnant,vouchers:(r.vouchers||[]).join('; '),voucherCount:r.voucherCount,registeredBy:r.registeredBy,distributed:r.distributed?'Yes':'No'});});
     state.distributions.forEach(function(d){all.push({type:'Distribution',id:d.id,timestamp:d.timestamp,district:d.district,dp:d.distributionPoint,hhName:d.hhName,voucherCode:d.voucherCode,distributedBy:d.distributedBy});});
     state.itnStock.forEach(function(s){all.push({type:'Stock',id:s.id,timestamp:s.timestamp,date:s.date,batch:s.batch,itnType:s.type,quantity:s.quantity,from:s.from,dp:s.distributionPoint});});
-    state.dhmtRecords.forEach(function(r){all.push({type:'DHMT',id:r.id,timestamp:r.timestamp,date:r.date,batch:r.batch,itnType:r.type,quantity:r.quantity,toPhu:r.toPhu,from:r.from,district:r.district,recordedBy:r.recordedBy});});
-    state.phuRecords.forEach(function(r){all.push({type:'PHU',id:r.id,timestamp:r.timestamp,date:r.date,batch:r.batch,itnType:r.type,quantity:r.quantity,toDp:r.toDp,from:r.from,district:r.district,recordedBy:r.recordedBy});});
+    state.dhmtRecords.forEach(function(r){all.push({type:'DHMT',id:r.id,timestamp:r.timestamp,date:r.date,batch:r.batch,itnTypes:r.typeSummary||(r.quantity+' '+r.type),totalQuantity:r.totalQuantity||r.quantity,toPhu:r.toPhu,district:r.district,recordedBy:r.recordedBy});});
+    state.phuRecords.forEach(function(r){all.push({type:'PHU',id:r.id,timestamp:r.timestamp,date:r.date,batch:r.batch,itnTypes:r.typeSummary||(r.quantity+' '+r.type),totalQuantity:r.totalQuantity||r.quantity,toDp:r.toDp,from:r.from,district:r.district,recordedBy:r.recordedBy});});
     if(!all.length){showNotification('No data','info');return;}
     var keys=new Set();all.forEach(function(item){Object.keys(item).forEach(function(k){keys.add(k);});});var h=Array.from(keys);
     var csv=h.join(',')+'\n';all.forEach(function(item){csv+=h.map(function(k){var v=String(item[k]||'');if(v.includes(',')||v.includes('"'))v='"'+v.replace(/"/g,'""')+'"';return v;}).join(',')+'\n';});
