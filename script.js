@@ -1,32 +1,12 @@
-const CONFIG={SCRIPT_URL:'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec',CSV_FILE:'cascading_data.csv'};
-const USERS_DB={
-    // DHMT users
-    'dhmt001':{password:'dhmt001',name:'DHMT Officer Bo',role:'dhmt',dp_id:'dp001'},
-    'dhmt002':{password:'dhmt002',name:'DHMT Officer Kenema',role:'dhmt',dp_id:'dp005'},
-    // PHU users
-    'phu001':{password:'phu001',name:'PHU Officer Kakua',role:'phu',dp_id:'dp001'},
-    'phu002':{password:'phu002',name:'PHU Officer Nongowa',role:'phu',dp_id:'dp005'},
-    // Field agents
-    'user001':{password:'pass001',name:'Mohamed Kanu',role:'field_agent',dp_id:'dp001'},
-    'user002':{password:'pass002',name:'Fatmata Sesay',role:'field_agent',dp_id:'dp002'},
-    'user003':{password:'pass003',name:'Ibrahim Kamara',role:'field_agent',dp_id:'dp005'},
-    'user004':{password:'pass004',name:'Aminata Conteh',role:'field_agent',dp_id:'dp006'},
-    'user005':{password:'pass005',name:'Abu Bangura',role:'field_agent',dp_id:'dp008'},
-    'user006':{password:'pass006',name:'Mariama Jalloh',role:'field_agent',dp_id:'dp011'},
-    'user007':{password:'pass007',name:'Samuel Koroma',role:'field_agent',dp_id:'dp013'},
-    'user008':{password:'pass008',name:'Hawa Turay',role:'field_agent',dp_id:'dp015'},
-    'user009':{password:'pass009',name:'Alhaji Sesay',role:'field_agent',dp_id:'dp016'},
-    'user010':{password:'pass010',name:'Isata Mansaray',role:'field_agent',dp_id:'dp019'},
-    'sup001':{password:'sup001',name:'John Supervisor',role:'supervisor',dp_id:'dp001'},
-    'admin':{password:'admin123',name:'Admin User',role:'admin',dp_id:'dp001'}
-};
+const CONFIG={SCRIPT_URL:'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec',CSV_FILE:'cascading_data.csv',USERS_FILE:'users.csv'};
+let USERS_DB={};
 const ROLE_LABELS={dhmt:'DHMT Distribution',phu:'PHU Distribution',field_agent:'Field Agent',supervisor:'Supervisor',admin:'Administrator'};
 
-let cascadingData=[],csvLoaded=false,lastReceipt=null,progressChart=null,hourlyChart=null;
+let cascadingData=[],csvLoaded=false,usersLoaded=false,lastReceipt=null,progressChart=null,hourlyChart=null;
 const state={isLoggedIn:false,currentUser:null,currentDP:null,geoInfo:{},registrations:[],distributions:[],itnStock:[],dhmtRecords:[],phuRecords:[],syncLog:[],isOnline:navigator.onLine};
 
 // INIT
-function init(){loadFromStorage();loadCascadingCSV();populateCredentialsTable();setupEventListeners();
+function init(){loadFromStorage();loadCascadingCSV();loadUsersCSV();setupEventListeners();
     if(state.isLoggedIn&&state.currentUser)routeUser();
     if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(function(){});
 }
@@ -37,21 +17,33 @@ function saveToStorage(){try{localStorage.setItem('itn_mass_state',JSON.stringif
 function loadCascadingCSV(){var el=document.getElementById('csvStatus');
     Papa.parse(CONFIG.CSV_FILE,{download:true,header:true,skipEmptyLines:true,
         complete:function(r){cascadingData=r.data.filter(function(row){return row.district&&row.dp_id;});csvLoaded=true;
-            if(el)el.innerHTML='<div class="csv-loaded"><span style="font-size:16px;">✓</span> <span>Loaded <strong>'+cascadingData.length+'</strong> points</span></div>';
-            onUserIdInput();populateCredentialsTable();},
+            checkBothLoaded();onUserIdInput();},
         error:function(){csvLoaded=false;if(el)el.innerHTML='<div class="csv-error"><span>✗</span> CSV not loaded</div>';}
     });
+}
+function loadUsersCSV(){
+    Papa.parse(CONFIG.USERS_FILE,{download:true,header:true,skipEmptyLines:true,
+        complete:function(r){USERS_DB={};r.data.forEach(function(row){
+            if(row.user_id&&row.password)USERS_DB[row.user_id.trim().toLowerCase()]={password:row.password.trim(),name:row.name||'',role:row.role||'field_agent',dp_id:row.dp_id||''};
+        });usersLoaded=true;checkBothLoaded();onUserIdInput();},
+        error:function(){usersLoaded=false;var el=document.getElementById('csvStatus');if(el)el.innerHTML='<div class="csv-error"><span>✗</span> Users CSV not loaded</div>';}
+    });
+}
+function checkBothLoaded(){var el=document.getElementById('csvStatus');if(!el)return;
+    if(csvLoaded&&usersLoaded){el.innerHTML='<div class="csv-loaded"><span style="font-size:16px;">✓</span> <span>Loaded <strong>'+cascadingData.length+'</strong> points, <strong>'+Object.keys(USERS_DB).length+'</strong> users</span></div>';populateCredentialsTable();}
+    else if(csvLoaded||usersLoaded){el.innerHTML='<div class="csv-loading"><div class="csv-spinner"></div><span>Loading...</span></div>';}
 }
 
 // CREDENTIALS TABLE
 function populateCredentialsTable(){var tb=document.getElementById('credTableBody');if(!tb)return;tb.innerHTML='';
-    for(var uid in USERS_DB){var u=USERS_DB[uid];var loc=u.dp_id;
-        if(csvLoaded){var r=cascadingData.find(function(x){return x.dp_id===u.dp_id;});if(r)loc=r.distribution_point+' ('+r.district+')';}
-        var roleLabel=ROLE_LABELS[u.role]||u.role;
+    for(var uid in USERS_DB){var u=USERS_DB[uid];
+        var dist='—',chief='—',phu='—',dp='—';
+        if(csvLoaded){var r=cascadingData.find(function(x){return x.dp_id===u.dp_id;});
+            if(r){dist=r.district||'—';chief=r.chiefdom||'—';phu=r.phu_name||'—';dp=r.distribution_point||'—';}}
         var badge='';if(u.role==='dhmt')badge='<span style="background:#6f42c1;color:#fff;padding:2px 6px;border-radius:8px;font-size:9px;">DHMT</span>';
         else if(u.role==='phu')badge='<span style="background:#e91e8c;color:#fff;padding:2px 6px;border-radius:8px;font-size:9px;">PHU</span>';
         else badge='<span style="background:#0056a8;color:#fff;padding:2px 6px;border-radius:8px;font-size:9px;">FIELD</span>';
-        tb.innerHTML+='<tr><td class="uid">'+uid+'</td><td class="pwd">'+u.password+'</td><td>'+u.name+'</td><td>'+badge+'</td><td>'+loc+'</td></tr>';
+        tb.innerHTML+='<tr><td class="uid">'+uid+'</td><td class="pwd">'+u.password+'</td><td>'+u.name+'</td><td>'+badge+'</td><td>'+dist+'</td><td>'+chief+'</td><td>'+phu+'</td><td>'+dp+'</td></tr>';
     }
 }
 function toggleCredentials(){var w=document.getElementById('credTableWrap'),c=document.getElementById('credChevron');if(!w)return;
@@ -60,13 +52,13 @@ function toggleCredentials(){var w=document.getElementById('credTableWrap'),c=do
 
 // USER ID → AUTO-FILL
 function onUserIdInput(){var uid=document.getElementById('loginUserId').value.trim().toLowerCase(),block=document.getElementById('autoAssignment');
-    if(!uid||!USERS_DB[uid]||!csvLoaded){if(block)block.style.display='none';return;}
+    if(!uid||!USERS_DB[uid]||!csvLoaded||!usersLoaded){if(block)block.style.display='none';return;}
     var u=USERS_DB[uid],dpRow=cascadingData.find(function(r){return r.dp_id===u.dp_id;});
     if(!dpRow){if(block)block.style.display='none';return;}
     document.getElementById('assignRole').value=ROLE_LABELS[u.role]||u.role;
     document.getElementById('assignDP').value=dpRow.distribution_point||'';
     document.getElementById('assignDistrict').value=dpRow.district||'';
-    document.getElementById('assignCommunity').value=dpRow.community||'';
+    document.getElementById('assignCommunity').value=dpRow.phu_name||'';
     var title=document.getElementById('assignTitleText'),titleDiv=document.getElementById('assignTitle');
     if(u.role==='dhmt'){title.textContent='DHMT — DISTRICT LEVEL';titleDiv.style.background='#6f42c1';}
     else if(u.role==='phu'){title.textContent='PHU — HEALTH UNIT LEVEL';titleDiv.style.background='#e91e8c';}
@@ -92,12 +84,12 @@ function handleLogin(){
     var uid=document.getElementById('loginUserId').value.trim().toLowerCase(),pw=document.getElementById('loginPassword').value,err=document.getElementById('loginError');err.textContent='';
     if(!uid||!pw){err.textContent='Enter User ID and Password';return;}
     var u=USERS_DB[uid];if(!u||u.password!==pw){err.textContent='Invalid credentials';return;}
-    if(!csvLoaded){err.textContent='CSV not loaded';return;}
+    if(!csvLoaded||!usersLoaded){err.textContent='Data not loaded yet — please wait';return;}
     var dp=cascadingData.find(function(r){return r.dp_id===u.dp_id;});
     if(!dp){err.textContent='DP '+u.dp_id+' not found';return;}
     state.isLoggedIn=true;state.currentUser={id:uid,name:u.name,role:u.role};
-    state.currentDP={id:dp.dp_id,name:dp.distribution_point,district:dp.district,chiefdom:dp.chiefdom||'',community:dp.community||''};
-    state.geoInfo={district:dp.district,chiefdom:dp.chiefdom||'',community:dp.community||'',distributionPoint:dp.distribution_point};
+    state.currentDP={id:dp.dp_id,name:dp.distribution_point,district:dp.district,chiefdom:dp.chiefdom||'',phuName:dp.phu_name||''};
+    state.geoInfo={district:dp.district,chiefdom:dp.chiefdom||'',phuName:dp.phu_name||'',distributionPoint:dp.distribution_point};
     saveToStorage();routeUser();showNotification('Welcome, '+u.name+'!','success');
 }
 function routeUser(){
@@ -123,7 +115,25 @@ function showDHMTScreen(){
     var ut=document.getElementById('dhmtUserTag');if(ut)ut.textContent=state.currentUser.name.split(' ')[0].toUpperCase();
     document.getElementById('dhmtDistrict').textContent=state.geoInfo.district||'—';
     var df=document.getElementById('dhmt_date');if(df&&!df.value)df.value=new Date().toISOString().split('T')[0];
+    populateDhmtPhuDropdown();
     renderDHMTHistory();
+}
+function populateDhmtPhuDropdown(){
+    var sel=document.getElementById('dhmt_to_phu');if(!sel)return;
+    sel.innerHTML='<option value="">Select PHU...</option>';
+    var district=state.geoInfo.district;if(!district)return;
+    var phus=[];cascadingData.forEach(function(r){
+        if(r.district===district&&r.phu_name&&phus.indexOf(r.phu_name)===-1)phus.push(r.phu_name);
+    });
+    phus.sort();phus.forEach(function(p){var o=document.createElement('option');o.value=p;o.textContent=p;sel.appendChild(o);});
+}
+function populatePhuDpDropdown(){
+    var sel=document.getElementById('phu_to_dp');if(!sel)return;
+    sel.innerHTML='<option value="">Select Distribution Point...</option>';
+    var chiefdom=state.geoInfo.chiefdom;if(!chiefdom)return;
+    cascadingData.forEach(function(r){
+        if(r.chiefdom===chiefdom&&r.distribution_point){var o=document.createElement('option');o.value=r.distribution_point;o.textContent=r.distribution_point;sel.appendChild(o);}
+    });
 }
 function submitDHMT(){
     var date=document.getElementById('dhmt_date').value,batch=document.getElementById('dhmt_batch').value.trim();
@@ -147,7 +157,9 @@ function showPHUScreen(){
     var ut=document.getElementById('phuUserTag');if(ut)ut.textContent=state.currentUser.name.split(' ')[0].toUpperCase();
     document.getElementById('phuDistrict').textContent=state.geoInfo.district||'—';
     document.getElementById('phuChiefdom').textContent=state.geoInfo.chiefdom||'—';
-    document.getElementById('phu_from').value=state.geoInfo.community||state.geoInfo.chiefdom||'';
+    var pn=document.getElementById('phuName');if(pn)pn.textContent=state.geoInfo.phuName||'—';
+    document.getElementById('phu_from').value=state.geoInfo.phuName||state.geoInfo.chiefdom||'';
+    populatePhuDpDropdown();
     var df=document.getElementById('phu_date');if(df&&!df.value)df.value=new Date().toISOString().split('T')[0];
     renderPHUHistory();
 }
@@ -174,10 +186,10 @@ function showAppScreen(){
     var ut=document.getElementById('userTag');if(ut)ut.textContent=state.currentUser.name.split(' ')[0].toUpperCase();
     document.getElementById('geoDistrict').textContent=state.geoInfo.district||'—';
     document.getElementById('geoChiefdom').textContent=state.geoInfo.chiefdom||'—';
-    document.getElementById('geoCommunity').textContent=state.geoInfo.community||'—';
+    document.getElementById('geoCommunity').textContent=state.geoInfo.phuName||'—';
     document.getElementById('geoDP').textContent=state.geoInfo.distributionPoint||'—';
-    // Prefill "Received From" with community name
-    var rf=document.getElementById('itn_recv_from');if(rf)rf.value=state.geoInfo.community||state.geoInfo.chiefdom||'';
+    // Prefill "Received From" with PHU name
+    var rf=document.getElementById('itn_recv_from');if(rf)rf.value=state.geoInfo.phuName||state.geoInfo.chiefdom||'';
     updateOnlineStatus();updateAllCounts();updateStockSummary();updateDistHistory();updateSyncStats();generateHHId();captureRegGPS();checkStockForDistribution();
     var df=document.getElementById('itn_recv_date');if(df&&!df.value)df.value=new Date().toISOString().split('T')[0];
 }
@@ -251,7 +263,7 @@ function submitRegistration(){
     var count;if(total<=3)count=1;else if(total<=5)count=2;else count=3;
     var vouchers=[];for(var i=0;i<count;i++){var code;do{code=generateVoucherCode();}while(vouchers.includes(code));vouchers.push(code);}
     var rec={id:hhId,timestamp:new Date().toISOString(),distributionPoint:state.currentDP?state.currentDP.name:'',dpId:state.currentDP?state.currentDP.id:'',
-        district:state.geoInfo.district,chiefdom:state.geoInfo.chiefdom,community:state.geoInfo.community,
+        district:state.geoInfo.district,chiefdom:state.geoInfo.chiefdom,phuName:state.geoInfo.phuName,
         registeredBy:state.currentUser?state.currentUser.name:'',userId:state.currentUser?state.currentUser.id:'',
         hhName:name,hhPhone:phone,totalPeople:total,males:males,females:females,under5:under5,pregnant:pregnant,
         vouchers:vouchers,voucherCount:vouchers.length,gpsLat:document.getElementById('reg_gps_lat').value,gpsLng:document.getElementById('reg_gps_lng').value,gpsAcc:document.getElementById('reg_gps_acc').value,
@@ -276,7 +288,7 @@ function buildReceipt(rec){var c=document.getElementById('voucherReceipt');
         '<div class="receipt-info-item"><div class="receipt-info-label">Under 5</div><div class="receipt-info-value">'+rec.under5+'</div></div>'+
         '<div class="receipt-info-item"><div class="receipt-info-label">Pregnant</div><div class="receipt-info-value">'+rec.pregnant+'</div></div>'+
         '<div class="receipt-info-item"><div class="receipt-info-label">District</div><div class="receipt-info-value">'+rec.district+'</div></div>'+
-        '<div class="receipt-info-item"><div class="receipt-info-label">Community</div><div class="receipt-info-value">'+rec.community+'</div></div></div>'+
+        '<div class="receipt-info-item"><div class="receipt-info-label">PHU</div><div class="receipt-info-value">'+rec.phuName+'</div></div></div>'+
         '<div class="receipt-vouchers-title">'+rec.voucherCount+' VOUCHER(S) — '+rec.voucherCount+' ITN(S)</div>'+vc+
         '<div class="receipt-important"><div class="receipt-important-text">⚠ BRING THIS RECEIPT TO COLLECT YOUR ITN(S)</div></div></div>'+
         '<div class="receipt-footer"><div class="receipt-footer-dp">'+rec.distributionPoint+'</div><div class="receipt-footer-text">By: '+rec.registeredBy+'</div><div class="receipt-footer-date">'+ds+' '+ts+'</div></div>';
@@ -325,7 +337,7 @@ function confirmDistribution(vc){if(getStockRemaining()<=0){showNotification('No
         hhName:reg.hhName,hhPhone:reg.hhPhone,totalPeople:reg.totalPeople,males:reg.males,females:reg.females,under5:reg.under5,pregnant:reg.pregnant,
         distributionPoint:state.currentDP?state.currentDP.name:'',dpId:state.currentDP?state.currentDP.id:'',
         distributedBy:state.currentUser?state.currentUser.name:'',userId:state.currentUser?state.currentUser.id:'',
-        district:state.geoInfo.district,chiefdom:state.geoInfo.chiefdom,community:state.geoInfo.community,synced:false};
+        district:state.geoInfo.district,chiefdom:state.geoInfo.chiefdom,phuName:state.geoInfo.phuName,synced:false};
     state.distributions.push(rec);reg.distributed=true;saveToStorage();document.getElementById('verifyResultBlock').style.display='none';
     showNotification('ITN → '+reg.hhName,'success');sendToSheet('distribution',rec);updateAllCounts();updateDistHistory();updateStockSummary();updateSyncStats();checkStockForDistribution();}
 function updateDistHistory(){var c=document.getElementById('distHistory');if(!c)return;var r=state.distributions.slice().reverse().slice(0,30);
@@ -349,9 +361,67 @@ function updateStockSummary(){var tR=getStockReceived(),tD=getDistributed();
     if(!state.itnStock.length){c.innerHTML='<div class="no-data">No records</div>';return;}
     c.innerHTML=state.itnStock.slice().reverse().map(function(s){return '<div class="stock-item"><div><strong>'+s.quantity+' '+s.type+'</strong> <span style="color:#999;margin-left:6px;">'+(s.batch||'—')+'</span></div><div style="color:#999;">'+s.date+'</div></div>';}).join('');}
 
+// DASHBOARD CASCADING FILTERS
+function populateDashFilters(){
+    var dSel=document.getElementById('dashFilterDistrict');if(!dSel)return;
+    var curD=dSel.value;dSel.innerHTML='<option value="">All Districts</option>';
+    var dists=[];cascadingData.forEach(function(r){if(r.district&&dists.indexOf(r.district)===-1)dists.push(r.district);});
+    dists.sort();dists.forEach(function(d){var o=document.createElement('option');o.value=d;o.textContent=d;dSel.appendChild(o);});
+    if(curD)dSel.value=curD;
+}
+function onDashDistrictChange(){
+    var dist=document.getElementById('dashFilterDistrict').value;
+    var cSel=document.getElementById('dashFilterChiefdom');cSel.innerHTML='<option value="">All Chiefdoms</option>';
+    document.getElementById('dashFilterPhu').innerHTML='<option value="">All PHUs</option>';
+    document.getElementById('dashFilterDP').innerHTML='<option value="">All DPs</option>';
+    if(dist){var chiefs=[];cascadingData.forEach(function(r){if(r.district===dist&&r.chiefdom&&chiefs.indexOf(r.chiefdom)===-1)chiefs.push(r.chiefdom);});
+        chiefs.sort();chiefs.forEach(function(c){var o=document.createElement('option');o.value=c;o.textContent=c;cSel.appendChild(o);});}
+    refreshDashboard();
+}
+function onDashChiefdomChange(){
+    var dist=document.getElementById('dashFilterDistrict').value,chief=document.getElementById('dashFilterChiefdom').value;
+    var pSel=document.getElementById('dashFilterPhu');pSel.innerHTML='<option value="">All PHUs</option>';
+    document.getElementById('dashFilterDP').innerHTML='<option value="">All DPs</option>';
+    if(chief){var phus=[];cascadingData.forEach(function(r){if(r.district===dist&&r.chiefdom===chief&&r.phu_name&&phus.indexOf(r.phu_name)===-1)phus.push(r.phu_name);});
+        phus.sort();phus.forEach(function(p){var o=document.createElement('option');o.value=p;o.textContent=p;pSel.appendChild(o);});}
+    refreshDashboard();
+}
+function onDashPhuChange(){
+    var dist=document.getElementById('dashFilterDistrict').value,chief=document.getElementById('dashFilterChiefdom').value,phu=document.getElementById('dashFilterPhu').value;
+    var dpSel=document.getElementById('dashFilterDP');dpSel.innerHTML='<option value="">All DPs</option>';
+    if(phu){cascadingData.forEach(function(r){if(r.district===dist&&r.chiefdom===chief&&r.phu_name===phu&&r.distribution_point){
+        var o=document.createElement('option');o.value=r.dp_id;o.textContent=r.distribution_point;dpSel.appendChild(o);}});}
+    refreshDashboard();
+}
+function getDashFilter(){
+    return{district:document.getElementById('dashFilterDistrict')?document.getElementById('dashFilterDistrict').value:'',
+        chiefdom:document.getElementById('dashFilterChiefdom')?document.getElementById('dashFilterChiefdom').value:'',
+        phu:document.getElementById('dashFilterPhu')?document.getElementById('dashFilterPhu').value:'',
+        dpId:document.getElementById('dashFilterDP')?document.getElementById('dashFilterDP').value:''};
+}
+function filterByLocation(records,f){
+    return records.filter(function(r){
+        if(f.district&&r.district!==f.district)return false;
+        if(f.chiefdom&&r.chiefdom!==f.chiefdom)return false;
+        if(f.phu&&r.phuName!==f.phu)return false;
+        if(f.dpId&&r.dpId!==f.dpId)return false;
+        return true;
+    });
+}
+
 // DASHBOARD
-function refreshDashboard(){var regs=state.registrations,dists=state.distributions,el=function(id){return document.getElementById(id);};
-    el('dshRegCount').textContent=regs.length;el('dshDistCount').textContent=dists.length;el('dshStockRem').textContent=getStockRemaining();
+function refreshDashboard(){var f=getDashFilter();
+    populateDashFilters();
+    var regs=filterByLocation(state.registrations,f);
+    var dists=filterByLocation(state.distributions,f);
+    var stocks=state.itnStock.filter(function(s){
+        if(f.district){var dp=cascadingData.find(function(c){return c.dp_id===s.dpId;});if(!dp||dp.district!==f.district)return false;
+            if(f.chiefdom&&dp.chiefdom!==f.chiefdom)return false;if(f.phu&&dp.phu_name!==f.phu)return false;if(f.dpId&&s.dpId!==f.dpId)return false;}
+        return true;
+    });
+    var stockRcv=0;stocks.forEach(function(s){stockRcv+=s.quantity;});
+    var el=function(id){return document.getElementById(id);};
+    el('dshRegCount').textContent=regs.length;el('dshDistCount').textContent=dists.length;el('dshStockRem').textContent=stockRcv-dists.length;
     var tP=0,tM=0,tF=0,tU=0,tPr=0,tV=0;
     regs.forEach(function(r){tP+=r.totalPeople;tM+=r.males;tF+=r.females;tU+=r.under5;tPr+=r.pregnant;tV+=r.voucherCount;});
     el('dshPeople').textContent=tP;el('dshMales').textContent=tM;el('dshFemales').textContent=tF;el('dshUnder5').textContent=tU;el('dshPregnant').textContent=tPr;
@@ -359,7 +429,7 @@ function refreshDashboard(){var regs=state.registrations,dists=state.distributio
     el('dshAvgHH').textContent=regs.length>0?(tP/regs.length).toFixed(1):'0';
     var pCtx=document.getElementById('progressChart');
     if(pCtx){if(progressChart)progressChart.destroy();
-        progressChart=new Chart(pCtx,{type:'doughnut',data:{labels:['Distributed','Pending','Stock Unused'],datasets:[{data:[dists.length,Math.max(0,tV-dists.length),Math.max(0,getStockRemaining()-tV+dists.length)],backgroundColor:['#28a745','#ffc107','#0056a8'],borderWidth:2}]},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{font:{family:'Oswald',size:11}}}}}});}
+        progressChart=new Chart(pCtx,{type:'doughnut',data:{labels:['Distributed','Pending','Stock Unused'],datasets:[{data:[dists.length,Math.max(0,tV-dists.length),Math.max(0,stockRcv-dists.length-Math.max(0,tV-dists.length))],backgroundColor:['#28a745','#ffc107','#0056a8'],borderWidth:2}]},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{font:{family:'Oswald',size:11}}}}}});}
     var hCtx=document.getElementById('hourlyChart');
     if(hCtx){var hrs=new Array(24).fill(0),dH=new Array(24).fill(0);regs.forEach(function(r){hrs[new Date(r.timestamp).getHours()]++;});dists.forEach(function(d){dH[new Date(d.timestamp).getHours()]++;});
         var lbl=[];for(var i=6;i<=20;i++)lbl.push(i+':00');
@@ -367,13 +437,18 @@ function refreshDashboard(){var regs=state.registrations,dists=state.distributio
         hourlyChart=new Chart(hCtx,{type:'bar',data:{labels:lbl,datasets:[{label:'Registrations',data:lbl.map(function(_,idx){return hrs[idx+6];}),backgroundColor:'rgba(0,86,168,.7)',borderRadius:4},{label:'Distributions',data:lbl.map(function(_,idx){return dH[idx+6];}),backgroundColor:'rgba(40,167,69,.7)',borderRadius:4}]},options:{responsive:true,scales:{y:{beginAtZero:true,ticks:{stepSize:1}}},plugins:{legend:{labels:{font:{family:'Oswald',size:11}}}}}});}
     renderDataTable();}
 function renderDataTable(){var filter=document.getElementById('dataFilter').value,search=(document.getElementById('dataSearch').value||'').toLowerCase(),wrap=document.getElementById('dataTableWrap');
-    var data=[],headers=[];
-    if(filter==='registrations'){headers=['#','Time','Name','Phone','People','M/F','U5','Preg','Vouchers','Status'];
-        data=state.registrations.map(function(r,i){return {cells:[i+1,new Date(r.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),r.hhName,r.hhPhone,r.totalPeople,r.males+'/'+r.females,r.under5,r.pregnant,'<span class="mono">'+(r.vouchers||[]).join(', ')+'</span>',r.distributed?'<span style="color:#28a745;">✓</span>':'<span style="color:#fd7e14;">…</span>'],search:(r.hhName+' '+r.hhPhone+' '+(r.vouchers||[]).join(' ')).toLowerCase()};});}
-    else if(filter==='distributions'){headers=['#','Time','Name','Voucher','By'];
-        data=state.distributions.map(function(d,i){return {cells:[i+1,new Date(d.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),d.hhName,'<span class="mono">'+d.voucherCode+'</span>',d.distributedBy],search:(d.hhName+' '+d.voucherCode).toLowerCase()};});}
-    else{headers=['#','Date','Batch','Type','Qty','From'];
-        data=state.itnStock.map(function(s,i){return {cells:[i+1,s.date,s.batch||'—',s.type,s.quantity,s.from||'—'],search:(s.batch+' '+s.type+' '+s.from).toLowerCase()};});}
+    var f=getDashFilter();var data=[],headers=[];
+    if(filter==='registrations'){headers=['#','Time','District','Chiefdom','PHU','DP','Name','Phone','People','M/F','U5','Preg','Vouchers','Status'];
+        var fRegs=filterByLocation(state.registrations,f);
+        data=fRegs.map(function(r,i){return {cells:[i+1,new Date(r.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),r.district||'',r.chiefdom||'',r.phuName||'',r.distributionPoint||'',r.hhName,r.hhPhone,r.totalPeople,r.males+'/'+r.females,r.under5,r.pregnant,'<span class="mono">'+(r.vouchers||[]).join(', ')+'</span>',r.distributed?'<span style="color:#28a745;">✓</span>':'<span style="color:#fd7e14;">…</span>'],search:(r.hhName+' '+r.hhPhone+' '+(r.vouchers||[]).join(' ')+' '+r.district+' '+r.chiefdom+' '+(r.phuName||'')).toLowerCase()};});}
+    else if(filter==='distributions'){headers=['#','Time','District','PHU','DP','Name','Voucher','By'];
+        var fDists=filterByLocation(state.distributions,f);
+        data=fDists.map(function(d,i){return {cells:[i+1,new Date(d.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}),d.district||'',d.phuName||'',d.distributionPoint||'',d.hhName,'<span class="mono">'+d.voucherCode+'</span>',d.distributedBy],search:(d.hhName+' '+d.voucherCode+' '+d.district+' '+(d.phuName||'')).toLowerCase()};});}
+    else{headers=['#','Date','Batch','Type','Qty','From','DP'];
+        data=state.itnStock.filter(function(s){
+            if(f.district){var dp=cascadingData.find(function(c){return c.dp_id===s.dpId;});if(!dp||dp.district!==f.district)return false;
+                if(f.chiefdom&&dp.chiefdom!==f.chiefdom)return false;if(f.phu&&dp.phu_name!==f.phu)return false;if(f.dpId&&s.dpId!==f.dpId)return false;}return true;
+        }).map(function(s,i){return {cells:[i+1,s.date,s.batch||'—',s.type,s.quantity,s.from||'—',s.distributionPoint||''],search:(s.batch+' '+s.type+' '+s.from+' '+s.distributionPoint).toLowerCase()};});}
     if(search)data=data.filter(function(d){return d.search.includes(search);});
     if(!data.length){wrap.innerHTML='<div class="no-data">No records</div>';return;}
     wrap.innerHTML='<table class="data-table"><thead><tr>'+headers.map(function(h){return '<th>'+h+'</th>';}).join('')+'</tr></thead><tbody>'+data.map(function(d){return '<tr>'+d.cells.map(function(c){return '<td>'+c+'</td>';}).join('')+'</tr>';}).join('')+'</tbody></table>';}
@@ -396,7 +471,7 @@ function postToGAS(type,data){return fetch(CONFIG.SCRIPT_URL,{method:'POST',mode
 
 // EXPORT
 function exportData(){var all=[];
-    state.registrations.forEach(function(r){all.push({type:'Registration',id:r.id,timestamp:r.timestamp,district:r.district,chiefdom:r.chiefdom,community:r.community,dp:r.distributionPoint,hhName:r.hhName,hhPhone:r.hhPhone,totalPeople:r.totalPeople,males:r.males,females:r.females,under5:r.under5,pregnant:r.pregnant,vouchers:(r.vouchers||[]).join('; '),voucherCount:r.voucherCount,registeredBy:r.registeredBy,distributed:r.distributed?'Yes':'No'});});
+    state.registrations.forEach(function(r){all.push({type:'Registration',id:r.id,timestamp:r.timestamp,district:r.district,chiefdom:r.chiefdom,phuName:r.phuName,dp:r.distributionPoint,hhName:r.hhName,hhPhone:r.hhPhone,totalPeople:r.totalPeople,males:r.males,females:r.females,under5:r.under5,pregnant:r.pregnant,vouchers:(r.vouchers||[]).join('; '),voucherCount:r.voucherCount,registeredBy:r.registeredBy,distributed:r.distributed?'Yes':'No'});});
     state.distributions.forEach(function(d){all.push({type:'Distribution',id:d.id,timestamp:d.timestamp,district:d.district,dp:d.distributionPoint,hhName:d.hhName,voucherCode:d.voucherCode,distributedBy:d.distributedBy});});
     state.itnStock.forEach(function(s){all.push({type:'Stock',id:s.id,timestamp:s.timestamp,date:s.date,batch:s.batch,itnType:s.type,quantity:s.quantity,from:s.from,dp:s.distributionPoint});});
     state.dhmtRecords.forEach(function(r){all.push({type:'DHMT',id:r.id,timestamp:r.timestamp,date:r.date,batch:r.batch,itnType:r.type,quantity:r.quantity,toPhu:r.toPhu,from:r.from,district:r.district,recordedBy:r.recordedBy});});
