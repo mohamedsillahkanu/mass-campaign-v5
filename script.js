@@ -30,7 +30,12 @@ function loadUsersCSV(){
     });
 }
 function checkBothLoaded(){var el=document.getElementById('csvStatus');if(!el)return;
-    if(csvLoaded&&usersLoaded){el.innerHTML='<div class="csv-loaded"><span style="font-size:16px;">✓</span> <span>Loaded <strong>'+cascadingData.length+'</strong> points, <strong>'+Object.keys(USERS_DB).length+'</strong> users</span></div>';populateCredentialsTable();}
+    if(csvLoaded&&usersLoaded){el.innerHTML='<div class="csv-loaded"><span style="font-size:16px;">✓</span> <span>Loaded <strong>'+cascadingData.length+'</strong> points, <strong>'+Object.keys(USERS_DB).length+'</strong> users</span></div>';populateCredentialsTable();
+        // Refresh phuName in state from CSV (fixes stale localStorage)
+        if(state.currentDP&&state.currentDP.id){var cphu=cascadingData.find(function(r){return r.dp_id===state.currentDP.id;});
+            if(cphu&&cphu.phu_name){state.geoInfo.phuName=cphu.phu_name;state.currentDP.phuName=cphu.phu_name;saveToStorage();}
+        }
+    }
     else if(csvLoaded||usersLoaded){el.innerHTML='<div class="csv-loading"><div class="csv-spinner"></div><span>Loading...</span></div>';}
 }
 
@@ -90,6 +95,9 @@ function handleLogin(){
     state.isLoggedIn=true;state.currentUser={id:uid,name:u.name,role:u.role};
     state.currentDP={id:dp.dp_id,name:dp.distribution_point,district:dp.district,chiefdom:dp.chiefdom||'',phuName:dp.phu_name||''};
     state.geoInfo={district:dp.district,chiefdom:dp.chiefdom||'',phuName:dp.phu_name||'',distributionPoint:dp.distribution_point};
+    // Also refresh phuName from cascading data for any stale state
+    var cphu=cascadingData.find(function(r){return r.dp_id===dp.dp_id;});
+    if(cphu&&cphu.phu_name){state.geoInfo.phuName=cphu.phu_name;state.currentDP.phuName=cphu.phu_name;}
     saveToStorage();routeUser();showNotification('Welcome, '+u.name+'!','success');
 }
 function routeUser(){
